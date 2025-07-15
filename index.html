@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Wall AR Tilt Control</title>
+  <title>Wall AR - Controlled Image Movement</title>
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <style>
     html, body { margin: 0; padding: 0; overflow: hidden; }
@@ -31,7 +31,8 @@
     let reticlePlaced = false;
     let baseStripY = 0;
     let currentHeight = 0.3;
-    let movementEnabled = false; // Start disabled
+    let movementEnabled = false;
+    let lastPitch = 0;
 
     const log = msg => document.getElementById("log").innerText = "Status: " + msg;
 
@@ -48,11 +49,11 @@
 
       camera = xr.baseExperience.camera;
 
-      // Floor mesh
+      // Ground plane (invisible)
       const ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 100, height: 100 }, scene);
       ground.isVisible = false;
 
-      // Reticle strip
+      // Strip (reticle) at floor level
       reticle = BABYLON.MeshBuilder.CreateBox("reticle", {
         width: 0.6, height: 0.01, depth: 0.02
       }, scene);
@@ -62,10 +63,10 @@
       reticle.isVisible = true;
       reticle.position = new BABYLON.Vector3(0, -999, 0); // hide initially
 
-      // Main loop
+      // Per-frame logic
       scene.onBeforeRenderObservable.add(() => {
         if (!reticlePlaced) {
-          // Only move strip if not placed
+          // Strip follows floor hit point
           const ray = camera.getForwardRay(10);
           const hit = scene.pickWithRay(ray, m => m.name === "ground");
 
@@ -77,28 +78,35 @@
             const camY = camera.rotationQuaternion.toEulerAngles().y;
             reticle.rotationQuaternion = BABYLON.Quaternion.RotationAxis(BABYLON.Axis.Y, camY);
 
-            log("Aim strip at bottom of wall and tap");
+            log("Aim strip at wall base. Tap to place image.");
           }
         }
 
-        if (reticlePlaced && movementEnabled && placedImage) {
-          // Only move image if movement is enabled
+        if (reticlePlaced && placedImage && movementEnabled) {
+          // Move image based on pitch
           const forward = camera.getDirection(BABYLON.Axis.Z);
-          const pitch = Math.asin(forward.y);
-          const speed = 0.02;
+          const pitch = Math.asin(forward.y); // -π/2 to +π/2
+          lastPitch = pitch; // store only when moving
+
+          const speed = 0.10; // increased speed multiplier
           currentHeight += -pitch * speed;
 
+          // Clamp movement
           currentHeight = Math.max(0.1, Math.min(2.0, currentHeight));
           placedImage.position.y = baseStripY + currentHeight;
 
-          log("Tilt up/down to move image. Tap to stop.");
+          log("Tilt to move image. Tap again to stop.");
+        }
+
+        if (reticlePlaced && placedImage && !movementEnabled) {
+          // Lock image at current height
+          placedImage.position.y = baseStripY + currentHeight;
         }
       });
 
-      // Tap handler: Place image or toggle movement
+      // Tap: Place or toggle
       scene.onPointerDown = () => {
         if (!reticlePlaced) {
-          // Place image above reticle
           baseStripY = reticle.position.y;
           currentHeight = 0.3;
 
@@ -118,13 +126,12 @@
 
           placedImage = image;
           reticlePlaced = true;
-          movementEnabled = true; // start moving after placing
+          movementEnabled = true;
 
-          log("Image placed. Tilt to move, tap again to stop.");
+          log("Image placed. Tilt phone to move image.");
         } else if (placedImage) {
-          // Toggle movement
           movementEnabled = !movementEnabled;
-          log(movementEnabled ? "Tilt to move image." : "Image locked.");
+          log(movementEnabled ? "Movement enabled. Tilt to move." : "Image locked.");
         }
       };
 
