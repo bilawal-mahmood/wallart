@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Virtual Wall AR</title>
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+</head>
+<body style="margin: 0; overflow: hidden;">
+  <canvas id="renderCanvas" style="width: 100%; height: 100%; touch-action: none;"></canvas>
+
+  <script>
+    const canvas = document.getElementById("renderCanvas");
+    const engine = new BABYLON.Engine(canvas, true);
+
+    async function createScene() {
+      const scene = new BABYLON.Scene(engine);
+      const camera = new BABYLON.WebXRCamera("xrCamera", scene);
+
+      const light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
+
+      const xr = await scene.createDefaultXRExperienceAsync({
+        uiOptions: { sessionMode: "immersive-ar" },
+        optionalFeatures: ["hit-test"]
+      });
+
+      const hitTest = await xr.baseExperience.featuresManager.enableFeature(
+        BABYLON.WebXRHitTest.Name,
+        "latest",
+        { xrInput: xr.input }
+      );
+
+      const reticle = BABYLON.MeshBuilder.CreateDisc("reticle", { radius: 0.05 }, scene);
+      reticle.isVisible = false;
+      reticle.rotation.x = Math.PI / 2;
+      reticle.material = new BABYLON.StandardMaterial("mat", scene);
+      reticle.material.diffuseColor = new BABYLON.Color3(0, 1, 0);
+
+      hitTest.onHitTestResultObservable.add(results => {
+        if (results.length) {
+          const hit = results[0];
+          hit.transformationMatrix.decompose(undefined, undefined, reticle.position);
+          reticle.isVisible = true;
+        }
+      });
+
+      scene.onPointerDown = () => {
+        if (!reticle.isVisible) return;
+
+        const wall = BABYLON.MeshBuilder.CreateBox("wall", {
+          width: 0.6, // 60 cm
+          height: 0.6,
+          depth: 0.05
+        }, scene);
+        wall.position = reticle.position.clone();
+        wall.position.y += 0.3; // raise to stand on floor
+        wall.rotation.y = camera.rotation.y;
+
+        const mat = new BABYLON.StandardMaterial("artMat", scene);
+        mat.diffuseTexture = new BABYLON.Texture("art.png", scene);
+        wall.material = mat;
+      };
+
+      return scene;
+    }
+
+    createScene().then(scene => {
+      engine.runRenderLoop(() => scene.render());
+    });
+
+    window.addEventListener("resize", () => {
+      engine.resize();
+    });
+  </script>
+</body>
+</html>
