@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Wall AR Tilt-Controlled Placement</title>
+  <title>Babylon WebXR Wall Placement</title>
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <style>
     html, body { margin: 0; padding: 0; overflow: hidden; }
@@ -27,12 +27,8 @@
   <div id="log">Initializing…</div>
 
   <script>
-    let engine, scene, reticle, placedImage;
+    let engine, scene, camera, reticle, placedImage;
     let reticlePlaced = false;
-    let dragPlaneY = 0;
-    const moveSpeed = 0.03;
-    const maxDistance = 2.0;
-
     const log = msg => document.getElementById("log").innerText = "Status: " + msg;
 
     async function createScene() {
@@ -46,93 +42,64 @@
         optionalFeatures: true
       });
 
-      const hitTest = await xr.baseExperience.featuresManager.enableFeature(
-        BABYLON.WebXRHitTest.Name, "latest", { xrInput: xr.input }
-      );
+      camera = xr.baseExperience.camera;
 
-      // Reticle strip
-      reticle = BABYLON.MeshBuilder.CreateBox("strip", {
+      // Invisible ground mesh
+      const ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 100, height: 100 }, scene);
+      ground.isVisible = false;
+
+      // Reticle strip on floor
+      reticle = BABYLON.MeshBuilder.CreateBox("reticle", {
         width: 0.6, height: 0.01, depth: 0.02
       }, scene);
       const mat = new BABYLON.StandardMaterial("retMat", scene);
       mat.diffuseColor = new BABYLON.Color3(0, 1, 0);
       reticle.material = mat;
-      reticle.isVisible = false;
+      reticle.isVisible = true;
+      reticle.position = new BABYLON.Vector3(0, -999, 0); // start hidden
 
-      let initialSet = false;
-
-      hitTest.onHitTestResultObservable.add(results => {
-        if (results.length && !initialSet) {
-          let hit = results[0];
-          let scale = new BABYLON.Vector3();
-          let rotation = new BABYLON.Quaternion();
-          let position = new BABYLON.Vector3();
-          hit.transformationMatrix.decompose(scale, rotation, position);
-
-          const camY = xr.baseExperience.camera.rotationQuaternion.toEulerAngles().y;
-          reticle.rotationQuaternion = BABYLON.Quaternion.RotationAxis(BABYLON.Axis.Y, camY);
-          reticle.position = position.clone();
-          reticle.position.y += 0.005;
-          dragPlaneY = reticle.position.y;
-
-          reticle.isVisible = true;
-          initialSet = true;
-          log("Tilt phone to move strip. Tap to place image.");
-        }
-      });
-
-      // Tilt-based reticle movement
+      // Simulate center-screen raycast every frame
       scene.onBeforeRenderObservable.add(() => {
-        if (!reticle.isVisible || reticlePlaced) return;
+        if (reticlePlaced) return;
 
-        const camera = xr.baseExperience.camera;
-        const forward = camera.getDirection(BABYLON.Axis.Z);
-        const right = camera.getDirection(BABYLON.Axis.X);
+        const ray = camera.getForwardRay(10);
+        const hit = scene.pickWithRay(ray, mesh => mesh.name === "ground");
 
-        const pitch = Math.asin(forward.y); // forward/back
-        const roll = Math.asin(right.y);    // left/right
+        if (hit && hit.pickedPoint) {
+          const target = hit.pickedPoint.clone();
+          target.y += 0.005;
 
-        let movement = new BABYLON.Vector3();
+          reticle.position = BABYLON.Vector3.Lerp(reticle.position, target, 0.4);
 
-        // Horizontal tilt (roll): move left/right
-        movement.addInPlace(new BABYLON.Vector3(right.x, 0, right.z).scale(-roll * moveSpeed));
+          // Rotate strip to match camera Y
+          const camY = camera.rotationQuaternion.toEulerAngles().y;
+          reticle.rotationQuaternion = BABYLON.Quaternion.RotationAxis(BABYLON.Axis.Y, camY);
 
-        // Vertical tilt (pitch): move forward/back
-        movement.addInPlace(new BABYLON.Vector3(forward.x, 0, forward.z).scale(-pitch * moveSpeed));
-
-        reticle.position.addInPlace(movement);
-        reticle.position.y = dragPlaneY;
-
-        // Clamp max distance from camera to 2m
-        const distance = BABYLON.Vector3.Distance(reticle.position, camera.position);
-        if (distance > maxDistance) {
-          const dir = reticle.position.subtract(camera.position).normalize();
-          reticle.position = camera.position.add(dir.scale(maxDistance));
-          reticle.position.y = dragPlaneY;
+          log("Aim at bottom of wall and tap");
         }
       });
 
-      // Tap to place image and freeze reticle
+      // Tap to place image upright on wall
       scene.onPointerDown = () => {
-        if (!reticle.isVisible || placedImage) return;
+        if (reticlePlaced || !reticle) return;
 
-        const plane = BABYLON.MeshBuilder.CreatePlane("art", {
+        const image = BABYLON.MeshBuilder.CreatePlane("art", {
           width: 0.6, height: 0.6
         }, scene);
-        plane.position = reticle.position.clone();
-        plane.position.y += 0.3;
+        image.position = reticle.position.clone();
+        image.position.y += 0.3;
 
-        const camY = xr.baseExperience.camera.rotationQuaternion.toEulerAngles().y;
-        plane.rotationQuaternion = BABYLON.Quaternion.RotationAxis(BABYLON.Axis.Y, camY);
+        const camY = camera.rotationQuaternion.toEulerAngles().y;
+        image.rotationQuaternion = BABYLON.Quaternion.RotationAxis(BABYLON.Axis.Y, camY);
 
-        const mat = new BABYLON.StandardMaterial("imgMat", scene);
-        mat.diffuseTexture = new BABYLON.Texture("art.png", scene);
-        mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
-        plane.material = mat;
+        const imgMat = new BABYLON.StandardMaterial("imgMat", scene);
+        imgMat.diffuseTexture = new BABYLON.Texture("art.png", scene);
+        imgMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+        image.material = imgMat;
 
-        placedImage = plane;
+        placedImage = image;
         reticlePlaced = true;
-        log("Image placed. Reticle is now frozen.");
+        log("Image placed.");
       };
 
       engine.runRenderLoop(() => scene.render());
