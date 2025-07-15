@@ -3,73 +3,151 @@
 <head>
   <meta charset="utf-8" />
   <title>Virtual Wall AR</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: black;
+    }
+    #renderCanvas {
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+    #overlay {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.8);
+      color: white;
+      font-family: sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      flex-direction: column;
+      z-index: 10;
+    }
+    #log {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.6);
+      color: lime;
+      font-size: 14px;
+      padding: 10px;
+      max-width: 90%;
+      z-index: 11;
+      font-family: monospace;
+      border-radius: 5px;
+    }
+  </style>
 </head>
-<body style="margin: 0; overflow: hidden;">
-  <canvas id="renderCanvas" style="width: 100%; height: 100%; touch-action: none;"></canvas>
+<body>
+  <div id="overlay">
+    <h1>👋 Welcome to Virtual Wall AR</h1>
+    <p>Move your phone to detect the floor.<br>Tap the screen to place image.</p>
+    <button onclick="startAR()" style="padding: 10px 20px; font-size: 18px;">Start AR</button>
+  </div>
+  <div id="log">Status: Waiting…</div>
+  <canvas id="renderCanvas"></canvas>
 
   <script>
-    const canvas = document.getElementById("renderCanvas");
-    const engine = new BABYLON.Engine(canvas, true);
+    let engine, scene, logBox, reticle;
 
-    async function createScene() {
-      const scene = new BABYLON.Scene(engine);
-      const camera = new BABYLON.WebXRCamera("xrCamera", scene);
+    function log(msg) {
+      console.log(msg);
+      logBox.innerText = "Status: " + msg;
+    }
+
+    async function startAR() {
+      document.getElementById("overlay").style.display = "none";
+      logBox = document.getElementById("log");
+
+      if (!navigator.xr) {
+        log("WebXR not supported");
+        alert("WebXR is not supported on this device/browser.");
+        return;
+      }
+
+      log("Initializing Babylon.js…");
+
+      const canvas = document.getElementById("renderCanvas");
+      engine = new BABYLON.Engine(canvas, true);
+      scene = new BABYLON.Scene(engine);
 
       const light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
 
-      const xr = await scene.createDefaultXRExperienceAsync({
-        uiOptions: { sessionMode: "immersive-ar" },
-        optionalFeatures: ["hit-test"]
-      });
+      try {
+        const xrHelper = await BABYLON.WebXRDefaultExperience.CreateAsync(scene, {
+          uiOptions: {
+            sessionMode: "immersive-ar",
+            referenceSpaceType: "local"
+          },
+          optionalFeatures: true
+        });
 
-      const hitTest = await xr.baseExperience.featuresManager.enableFeature(
-        BABYLON.WebXRHitTest.Name,
-        "latest",
-        { xrInput: xr.input }
-      );
+        log("WebXR Session started");
 
-      const reticle = BABYLON.MeshBuilder.CreateDisc("reticle", { radius: 0.05 }, scene);
-      reticle.isVisible = false;
-      reticle.rotation.x = Math.PI / 2;
-      reticle.material = new BABYLON.StandardMaterial("mat", scene);
-      reticle.material.diffuseColor = new BABYLON.Color3(0, 1, 0);
+        const hitTest = await xrHelper.baseExperience.featuresManager.enableFeature(
+          BABYLON.WebXRHitTest.Name,
+          "latest",
+          {
+            xrInput: xrHelper.input
+          }
+        );
 
-      hitTest.onHitTestResultObservable.add(results => {
-        if (results.length) {
-          const hit = results[0];
-          hit.transformationMatrix.decompose(undefined, undefined, reticle.position);
-          reticle.isVisible = true;
-        }
-      });
+        reticle = BABYLON.MeshBuilder.CreateDisc("reticle", { radius: 0.05 }, scene);
+        reticle.rotation.x = Math.PI / 2;
+        reticle.isVisible = false;
+        const mat = new BABYLON.StandardMaterial("mat", scene);
+        mat.diffuseColor = new BABYLON.Color3(0, 1, 0);
+        reticle.material = mat;
 
-      scene.onPointerDown = () => {
-        if (!reticle.isVisible) return;
+        hitTest.onHitTestResultObservable.add(results => {
+          if (results.length) {
+            const hit = results[0];
+            hit.transformationMatrix.decompose(undefined, undefined, reticle.position);
+            reticle.isVisible = true;
+            log("Floor detected");
+          } else {
+            reticle.isVisible = false;
+            log("No floor detected");
+          }
+        });
 
-        const wall = BABYLON.MeshBuilder.CreateBox("wall", {
-          width: 0.6, // 60 cm
-          height: 0.6,
-          depth: 0.05
-        }, scene);
-        wall.position = reticle.position.clone();
-        wall.position.y += 0.3; // raise to stand on floor
-        wall.rotation.y = camera.rotation.y;
+        scene.onPointerDown = () => {
+          if (!reticle.isVisible) return;
 
-        const mat = new BABYLON.StandardMaterial("artMat", scene);
-        mat.diffuseTexture = new BABYLON.Texture("art.png", scene);
-        wall.material = mat;
-      };
+          log("Placed virtual wall");
 
-      return scene;
+          const wall = BABYLON.MeshBuilder.CreateBox("wall", {
+            width: 0.6,
+            height: 0.6,
+            depth: 0.05
+          }, scene);
+          wall.position = reticle.position.clone();
+          wall.position.y += 0.3;
+          wall.rotation.y = scene.activeCamera.rotation.y;
+
+          const mat = new BABYLON.StandardMaterial("wallMat", scene);
+          mat.diffuseTexture = new BABYLON.Texture("art.png", scene);
+          wall.material = mat;
+        };
+
+        engine.runRenderLoop(() => scene.render());
+      } catch (e) {
+        log("ERROR: " + e.message);
+        console.error(e);
+      }
     }
 
-    createScene().then(scene => {
-      engine.runRenderLoop(() => scene.render());
-    });
-
     window.addEventListener("resize", () => {
-      engine.resize();
+      if (engine) engine.resize();
     });
   </script>
 </body>
