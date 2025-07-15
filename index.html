@@ -3,35 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <title>Virtual Wall AR</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
-  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-      background: black;
-    }
-    #renderCanvas {
-      width: 100%;
-      height: 100%;
-      touch-action: none;
-    }
-    #overlay {
-      position: absolute;
-      width: 100%;
-      height: 100%;
-      background: rgba(0,0,0,0.8);
-      color: white;
-      font-family: sans-serif;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      flex-direction: column;
-      z-index: 10;
-    }
+    html, body { margin: 0; padding: 0; overflow: hidden; background: black; }
+    #renderCanvas { width: 100%; height: 100%; touch-action: none; }
     #log {
       position: absolute;
       bottom: 10px;
@@ -41,113 +16,115 @@
       font-size: 14px;
       padding: 10px;
       max-width: 90%;
-      z-index: 11;
+      z-index: 10;
       font-family: monospace;
       border-radius: 5px;
     }
   </style>
 </head>
 <body>
-  <div id="overlay">
-    <h1>👋 Welcome to Virtual Wall AR</h1>
-    <p>Move your phone to detect the floor.<br>Tap the screen to place image.</p>
-    <button onclick="startAR()" style="padding: 10px 20px; font-size: 18px;">Start AR</button>
-  </div>
-  <div id="log">Status: Waiting…</div>
   <canvas id="renderCanvas"></canvas>
+  <div id="log">Initializing…</div>
 
   <script>
-    let engine, scene, logBox, reticle;
+    let engine, scene, logBox, reticle, placedImage, isDragging = false;
+    let dragStartX = 0, dragStartY = 0;
 
-    function log(msg) {
+    const log = msg => {
       console.log(msg);
-      logBox.innerText = "Status: " + msg;
-    }
+      document.getElementById("log").innerText = "Status: " + msg;
+    };
 
-    async function startAR() {
-      document.getElementById("overlay").style.display = "none";
-      logBox = document.getElementById("log");
-
-      if (!navigator.xr) {
-        log("WebXR not supported");
-        alert("WebXR is not supported on this device/browser.");
-        return;
-      }
-
-      log("Initializing Babylon.js…");
-
+    async function createScene() {
       const canvas = document.getElementById("renderCanvas");
       engine = new BABYLON.Engine(canvas, true);
       scene = new BABYLON.Scene(engine);
+      logBox = document.getElementById("log");
 
-      const light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
+      new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
 
-      try {
-        const xrHelper = await BABYLON.WebXRDefaultExperience.CreateAsync(scene, {
-          uiOptions: {
-            sessionMode: "immersive-ar",
-            referenceSpaceType: "local"
-          },
-          optionalFeatures: true
-        });
+      const xr = await BABYLON.WebXRDefaultExperience.CreateAsync(scene, {
+        uiOptions: { sessionMode: "immersive-ar" },
+        optionalFeatures: true
+      });
 
-        log("WebXR Session started");
+      log("WebXR started");
 
-        const hitTest = await xrHelper.baseExperience.featuresManager.enableFeature(
-          BABYLON.WebXRHitTest.Name,
-          "latest",
-          {
-            xrInput: xrHelper.input
-          }
-        );
+      const hitTest = await xr.baseExperience.featuresManager.enableFeature(
+        BABYLON.WebXRHitTest.Name, "latest", { xrInput: xr.input }
+      );
 
-        reticle = BABYLON.MeshBuilder.CreateDisc("reticle", { radius: 0.05 }, scene);
-        reticle.rotation.x = Math.PI / 2;
-        reticle.isVisible = false;
-        const mat = new BABYLON.StandardMaterial("mat", scene);
-        mat.diffuseColor = new BABYLON.Color3(0, 1, 0);
-        reticle.material = mat;
+      // STRIP instead of circle
+      reticle = BABYLON.MeshBuilder.CreateBox("strip", {
+        width: 0.4, height: 0.01, depth: 0.05
+      }, scene);
+      reticle.material = new BABYLON.StandardMaterial("mat", scene);
+      reticle.material.diffuseColor = new BABYLON.Color3(0, 1, 0);
+      reticle.isVisible = false;
 
-        hitTest.onHitTestResultObservable.add(results => {
-          if (results.length) {
-            const hit = results[0];
-            hit.transformationMatrix.decompose(undefined, undefined, reticle.position);
-            reticle.isVisible = true;
-            log("Floor detected");
-          } else {
-            reticle.isVisible = false;
-            log("No floor detected");
-          }
-        });
+      hitTest.onHitTestResultObservable.add(results => {
+        if (results.length) {
+          const hit = results[0];
+          hit.transformationMatrix.decompose(undefined, undefined, reticle.position);
+          reticle.isVisible = true;
+          log("Ready: Tap to place image");
+        }
+      });
 
-        scene.onPointerDown = () => {
-          if (!reticle.isVisible) return;
+      scene.onPointerDown = (evt, pickResult) => {
+        if (!reticle.isVisible || placedImage) return;
 
-          log("Placed virtual wall");
+        // Create upright plane (image) facing user
+        const plane = BABYLON.MeshBuilder.CreatePlane("art", {
+          width: 0.6, height: 0.6
+        }, scene);
+        plane.position = reticle.position.clone();
+        plane.position.y += 0.3; // lift above strip
+        plane.rotationQuaternion = BABYLON.Quaternion.RotationAxis(BABYLON.Axis.Y, xr.baseExperience.camera.rotation.y);
 
-          const wall = BABYLON.MeshBuilder.CreateBox("wall", {
-            width: 0.6,
-            height: 0.6,
-            depth: 0.05
-          }, scene);
-          wall.position = reticle.position.clone();
-          wall.position.y += 0.3;
-          wall.rotation.y = scene.activeCamera.rotation.y;
+        const mat = new BABYLON.StandardMaterial("imgMat", scene);
+        mat.diffuseTexture = new BABYLON.Texture("art.png", scene);
+        mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+        plane.material = mat;
 
-          const mat = new BABYLON.StandardMaterial("wallMat", scene);
-          mat.diffuseTexture = new BABYLON.Texture("art.png", scene);
-          wall.material = mat;
-        };
+        placedImage = plane;
+        log("Image placed. Swipe to move.");
+      };
 
-        engine.runRenderLoop(() => scene.render());
-      } catch (e) {
-        log("ERROR: " + e.message);
-        console.error(e);
-      }
+      // Drag logic for screen swipe
+      scene.onPointerObservable.add((pointerInfo) => {
+        if (!placedImage) return;
+
+        switch (pointerInfo.type) {
+          case BABYLON.PointerEventTypes.POINTERDOWN:
+            isDragging = true;
+            dragStartX = pointerInfo.event.clientX;
+            dragStartY = pointerInfo.event.clientY;
+            break;
+          case BABYLON.PointerEventTypes.POINTERUP:
+            isDragging = false;
+            break;
+          case BABYLON.PointerEventTypes.POINTERMOVE:
+            if (isDragging) {
+              const dx = (pointerInfo.event.clientX - dragStartX) * 0.0015;
+              const dy = (pointerInfo.event.clientY - dragStartY) * 0.0015;
+              placedImage.position.x += dx;
+              placedImage.position.y -= dy;
+              dragStartX = pointerInfo.event.clientX;
+              dragStartY = pointerInfo.event.clientY;
+              log("Moving image");
+            }
+            break;
+        }
+      });
+
+      engine.runRenderLoop(() => scene.render());
+      window.addEventListener("resize", () => engine.resize());
     }
 
-    window.addEventListener("resize", () => {
-      if (engine) engine.resize();
+    createScene().catch(err => {
+      console.error(err);
+      log("Error: " + err.message);
     });
   </script>
 </body>
