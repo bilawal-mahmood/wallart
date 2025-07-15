@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Wall AR Tilt Control + Stop</title>
+  <title>Wall AR Tilt Control</title>
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <style>
     html, body { margin: 0; padding: 0; overflow: hidden; }
@@ -31,7 +31,7 @@
     let reticlePlaced = false;
     let baseStripY = 0;
     let currentHeight = 0.3;
-    let movementEnabled = true; // control toggle
+    let movementEnabled = false; // Start disabled
 
     const log = msg => document.getElementById("log").innerText = "Status: " + msg;
 
@@ -48,11 +48,11 @@
 
       camera = xr.baseExperience.camera;
 
-      // Invisible floor
+      // Floor mesh
       const ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 100, height: 100 }, scene);
       ground.isVisible = false;
 
-      // Strip (reticle)
+      // Reticle strip
       reticle = BABYLON.MeshBuilder.CreateBox("reticle", {
         width: 0.6, height: 0.01, depth: 0.02
       }, scene);
@@ -60,11 +60,12 @@
       mat.diffuseColor = new BABYLON.Color3(0, 1, 0);
       reticle.material = mat;
       reticle.isVisible = true;
-      reticle.position = new BABYLON.Vector3(0, -999, 0); // start hidden
+      reticle.position = new BABYLON.Vector3(0, -999, 0); // hide initially
 
-      // Render logic
+      // Main loop
       scene.onBeforeRenderObservable.add(() => {
         if (!reticlePlaced) {
+          // Only move strip if not placed
           const ray = camera.getForwardRay(10);
           const hit = scene.pickWithRay(ray, m => m.name === "ground");
 
@@ -75,31 +76,35 @@
             reticle.position = BABYLON.Vector3.Lerp(reticle.position, target, 0.4);
             const camY = camera.rotationQuaternion.toEulerAngles().y;
             reticle.rotationQuaternion = BABYLON.Quaternion.RotationAxis(BABYLON.Axis.Y, camY);
-            log("Aim at floor base of wall. Tap to place image.");
+
+            log("Aim strip at bottom of wall and tap");
           }
-        } else if (placedImage && movementEnabled) {
-          // Tilt to move image up/down
+        }
+
+        if (reticlePlaced && movementEnabled && placedImage) {
+          // Only move image if movement is enabled
           const forward = camera.getDirection(BABYLON.Axis.Z);
-          const pitch = Math.asin(forward.y); // -π/2 to π/2
+          const pitch = Math.asin(forward.y);
           const speed = 0.02;
           currentHeight += -pitch * speed;
 
           currentHeight = Math.max(0.1, Math.min(2.0, currentHeight));
           placedImage.position.y = baseStripY + currentHeight;
-          log("Tilt phone to move image. Tap again to stop movement.");
+
+          log("Tilt up/down to move image. Tap to stop.");
         }
       });
 
-      // Tap: Place or toggle movement
+      // Tap handler: Place image or toggle movement
       scene.onPointerDown = () => {
         if (!reticlePlaced) {
-          const image = BABYLON.MeshBuilder.CreatePlane("art", {
-            width: 0.6, height: 0.6
-          }, scene);
-
+          // Place image above reticle
           baseStripY = reticle.position.y;
           currentHeight = 0.3;
 
+          const image = BABYLON.MeshBuilder.CreatePlane("art", {
+            width: 0.6, height: 0.6
+          }, scene);
           image.position = reticle.position.clone();
           image.position.y = baseStripY + currentHeight;
 
@@ -113,10 +118,13 @@
 
           placedImage = image;
           reticlePlaced = true;
-          log("Image placed. Tilt to move, tap to stop.");
+          movementEnabled = true; // start moving after placing
+
+          log("Image placed. Tilt to move, tap again to stop.");
         } else if (placedImage) {
+          // Toggle movement
           movementEnabled = !movementEnabled;
-          log(movementEnabled ? "Tilt to move image." : "Image movement stopped.");
+          log(movementEnabled ? "Tilt to move image." : "Image locked.");
         }
       };
 
