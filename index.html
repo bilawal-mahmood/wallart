@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Virtual Wall AR</title>
+  <title>Wall AR Tilt Control</title>
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <style>
     html, body { margin: 0; padding: 0; overflow: hidden; }
@@ -27,95 +27,106 @@
   <div id="log">Initializing…</div>
 
   <script>
-    let engine, scene, logBox, reticle, placedImage;
-    let lastTilt = 0;
+    let engine, scene, reticle, placedImage;
+    let dragPlaneY = 0;
+    let moveSpeed = 0.02;  // sensitivity
 
-    const log = msg => {
-      console.log(msg);
-      document.getElementById("log").innerText = "Status: " + msg;
-    };
+    const log = msg => document.getElementById("log").innerText = "Status: " + msg;
 
     async function createScene() {
       const canvas = document.getElementById("renderCanvas");
       engine = new BABYLON.Engine(canvas, true);
       scene = new BABYLON.Scene(engine);
-      logBox = document.getElementById("log");
-
       new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
 
       const xr = await BABYLON.WebXRDefaultExperience.CreateAsync(scene, {
-        uiOptions: {
-          sessionMode: "immersive-ar",
-          referenceSpaceType: "local"
-        },
+        uiOptions: { sessionMode: "immersive-ar" },
         optionalFeatures: true
       });
-
-      log("WebXR started");
 
       const hitTest = await xr.baseExperience.featuresManager.enableFeature(
         BABYLON.WebXRHitTest.Name, "latest", { xrInput: xr.input }
       );
 
-      // Strip reticle
+      // Floor strip
       reticle = BABYLON.MeshBuilder.CreateBox("strip", {
-        width: 0.4, height: 0.01, depth: 0.05
+        width: 0.6, height: 0.01, depth: 0.02
       }, scene);
       reticle.material = new BABYLON.StandardMaterial("mat", scene);
       reticle.material.diffuseColor = new BABYLON.Color3(0, 1, 0);
       reticle.isVisible = false;
 
+      let initialSet = false;
+
       hitTest.onHitTestResultObservable.add(results => {
-        if (results.length) {
-          const hit = results[0];
-          hit.transformationMatrix.decompose(undefined, undefined, reticle.position);
+        if (results.length && !initialSet) {
+          let hit = results[0];
+          let scale = new BABYLON.Vector3();
+          let rotation = new BABYLON.Quaternion();
+          let position = new BABYLON.Vector3();
+          hit.transformationMatrix.decompose(scale, rotation, position);
+
+          // Align strip with camera Y rotation
+          const camRotY = xr.baseExperience.camera.rotationQuaternion.toEulerAngles().y;
+          reticle.rotationQuaternion = BABYLON.Quaternion.RotationAxis(BABYLON.Axis.Y, camRotY);
+          reticle.position = position.clone();
+          reticle.position.y += 0.005;
+
+          dragPlaneY = reticle.position.y;
           reticle.isVisible = true;
-          log("Ready: Tap to place image");
+          initialSet = true;
+
+          log("Tilt phone to move strip. Tap to place image.");
         }
       });
 
-      // Place image on tap
+      // Move strip using phone tilt (onBeforeRender)
+      scene.onBeforeRenderObservable.add(() => {
+        if (!reticle || !reticle.isVisible || placedImage) return;
+
+        const camera = xr.baseExperience.camera;
+
+        const forward = camera.getDirection(BABYLON.Axis.Z);
+        const right = camera.getDirection(BABYLON.Axis.X);
+
+        const pitch = Math.asin(forward.y); // up/down tilt
+        const roll = Math.asin(right.y);    // left/right tilt
+
+        const move = new BABYLON.Vector3();
+
+        // Roll → move left/right
+        move.addInPlace(new BABYLON.Vector3(right.x, 0, right.z).scale(-roll * moveSpeed));
+        // Pitch → move forward/back
+        move.addInPlace(new BABYLON.Vector3(forward.x, 0, forward.z).scale(-pitch * moveSpeed));
+
+        reticle.position.addInPlace(move);
+        reticle.position.y = dragPlaneY;
+      });
+
+      // Tap to place image
       scene.onPointerDown = () => {
         if (!reticle.isVisible || placedImage) return;
 
-        const plane = BABYLON.MeshBuilder.CreatePlane("art", {
+        const img = BABYLON.MeshBuilder.CreatePlane("art", {
           width: 0.6, height: 0.6
         }, scene);
-        plane.position = reticle.position.clone();
-        plane.position.y += 0.3;
-        plane.rotationQuaternion = BABYLON.Quaternion.RotationAxis(BABYLON.Axis.Y, xr.baseExperience.camera.rotation.y);
+        img.position = reticle.position.clone();
+        img.position.y += 0.3;
+
+        const camRotY = xr.baseExperience.camera.rotationQuaternion.toEulerAngles().y;
+        img.rotationQuaternion = BABYLON.Quaternion.RotationAxis(BABYLON.Axis.Y, camRotY);
 
         const mat = new BABYLON.StandardMaterial("imgMat", scene);
         mat.diffuseTexture = new BABYLON.Texture("art.png", scene);
         mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
-        plane.material = mat;
+        img.material = mat;
 
-        placedImage = plane;
-        lastTilt = getCameraPitch(xr.baseExperience.camera);
-        log("Image placed. Tilt phone up/down to move image.");
+        placedImage = img;
+        log("Image placed.");
       };
-
-      // Run loop: detect phone tilt
-      scene.onBeforeRenderObservable.add(() => {
-        if (placedImage) {
-          const pitch = getCameraPitch(xr.baseExperience.camera);
-          const diff = pitch - lastTilt;
-
-          if (Math.abs(diff) > 0.01) {
-            placedImage.position.y += diff * 2; // sensitivity
-            lastTilt = pitch;
-          }
-        }
-      });
 
       engine.runRenderLoop(() => scene.render());
       window.addEventListener("resize", () => engine.resize());
-    }
-
-    // Helper: get pitch from camera quaternion (rotation around X)
-    function getCameraPitch(camera) {
-      const forward = camera.getDirection(BABYLON.Axis.Z);
-      return Math.asin(forward.y); // y = up/down component of forward vector
     }
 
     createScene().catch(err => {
